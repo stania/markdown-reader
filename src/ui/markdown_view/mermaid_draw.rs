@@ -1,4 +1,4 @@
-use super::highlight::apply_block_highlight;
+use super::highlight::{BlockHighlightParams, apply_block_highlight};
 use super::state::VisualRange;
 use crate::app::App;
 use crate::theme::{Palette, Tokens};
@@ -286,12 +286,17 @@ fn render_mermaid_text_block(
         // allocations that the old path paid every frame.
         apply_block_highlight(
             &mut text.lines,
-            params.visual_mode,
-            params.cursor_line,
-            params.block_start,
-            params.block_end,
-            start,
-            tokens.state.selection_bg,
+            BlockHighlightParams {
+                visual_mode: params.visual_mode,
+                cursor_line: params.cursor_line,
+                block_start: params.block_start,
+                block_end: params.block_end,
+                clip_start: start,
+                bg: tokens.state.selection_bg,
+                // Mermaid source renders inside a full border, so the content
+                // width is the rect minus one column on each side.
+                width: rect.width.saturating_sub(2),
+            },
         );
     }
 

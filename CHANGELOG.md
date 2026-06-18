@@ -5,6 +5,24 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — current-line highlight leaves CJK background remnants on scroll
+
+The current-line highlight only patched the background onto existing spans, so
+the bar ended at the text width (ragged). While scrolling, `scroll_to_cursor`
+pins the cursor row at the viewport top/bottom edge (scrolloff=0), so that edge
+row is repeatedly repainted with the background as different-width lines churn
+through it. On terminals that do not clear the second cell of a wide (CJK)
+glyph when it is rewritten (e.g. Windows Terminal AtlasEngine, WezTerm), this
+left background remnants on the top/bottom line until a full redraw.
+
+The highlighted row is now padded to the full viewport width, so every cell is
+explicitly painted with a uniform background each frame and any stale wide-char
+half-cell stays invisible. This also matches the full-width current-line
+highlight common in editors. The mermaid-source path passes the bordered inner
+width so its highlight no longer over-runs the block border.
+
 ## [1.34.72] — 2026-06-17
 
 ### Fixed — file-tree focus correctness (#16, #17)

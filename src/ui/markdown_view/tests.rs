@@ -497,7 +497,7 @@ mod unit {
         use ratatui::style::Color;
         let bg = Color::Rgb(30, 30, 100);
         let mut lines = make_lines(3);
-        patch_cursor_highlight(&mut lines, 1, bg);
+        patch_cursor_highlight(&mut lines, 1, bg, 80);
 
         // Line 1 spans must carry the bg color.
         for span in &lines[1].spans {
@@ -512,8 +512,8 @@ mod unit {
         }
     }
 
-    /// An empty line at the target index must be replaced with a space span
-    /// carrying the bg color so the highlight row is visible.
+    /// An empty line at the target index must be filled with a full-width run
+    /// of spaces carrying the bg color so the highlight row spans the viewport.
     #[test]
     fn patch_cursor_highlight_fills_empty_line() {
         use ratatui::style::Color;
@@ -523,7 +523,7 @@ mod unit {
             Line::from(vec![]), // empty — no spans
             Line::from(Span::raw("after")),
         ];
-        patch_cursor_highlight(&mut lines, 1, bg);
+        patch_cursor_highlight(&mut lines, 1, bg, 10);
         assert_eq!(
             lines[1].spans.len(),
             1,
@@ -531,8 +531,8 @@ mod unit {
         );
         assert_eq!(
             lines[1].spans[0].content.as_ref(),
-            " ",
-            "filler span must be a single space"
+            " ".repeat(10),
+            "filler span must fill the full width with spaces"
         );
         assert_eq!(lines[1].spans[0].style.bg, Some(bg));
     }
@@ -544,13 +544,42 @@ mod unit {
         let bg = Color::Rgb(10, 10, 10);
         let mut lines = make_lines(2);
         // idx == 2 is one past the end.
-        patch_cursor_highlight(&mut lines, 2, bg);
+        patch_cursor_highlight(&mut lines, 2, bg, 80);
         // Both lines must be unchanged.
         for line in &lines {
             for span in &line.spans {
                 assert_eq!(span.style.bg, None);
             }
         }
+    }
+
+    /// A non-empty line shorter than the viewport must be padded to the full
+    /// width with a trailing bg span, so the highlight bar reaches the edge and
+    /// leaves no ragged background remnants on wide-char cells while scrolling.
+    #[test]
+    fn patch_cursor_highlight_pads_short_line_to_width() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(20, 60, 120);
+        // "line 1" is 6 display columns wide.
+        let mut lines = make_lines(2);
+        patch_cursor_highlight(&mut lines, 1, bg, 20);
+        // Every span on the row carries the bg.
+        for span in &lines[1].spans {
+            assert_eq!(span.style.bg, Some(bg));
+        }
+        // The row now spans the full width.
+        let total: usize = lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        assert_eq!(total, 20, "highlighted row must be padded to full width");
+        // The last span is the padding run of spaces.
+        let last = lines[1].spans.last().unwrap();
+        assert!(
+            last.content.chars().all(|c| c == ' '),
+            "trailing pad span must be spaces"
+        );
     }
 
     // ── source_line_at — Table with row_source_lines ─────────────────────────

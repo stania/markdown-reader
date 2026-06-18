@@ -6,34 +6,47 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Inputs for [`apply_block_highlight`].
+///
+/// Grouping these avoids the `clippy::too_many_arguments` lint while keeping
+/// the call site readable.
+pub struct BlockHighlightParams {
+    /// Current visual selection, or `None` for normal mode.
+    pub visual_mode: Option<VisualRange>,
+    /// Absolute logical cursor position.
+    pub cursor_line: u32,
+    /// Absolute logical line where this block starts.
+    pub block_start: u32,
+    /// Exclusive end of the block in absolute logical lines.
+    pub block_end: u32,
+    /// Index within the block of the first visible line (same as the `start`
+    /// variable used when slicing `visible_text`).
+    pub clip_start: usize,
+    /// Background colour to apply.
+    pub bg: Color,
+    /// Viewport content width; full-line highlights are padded to it.
+    pub width: u16,
+}
+
 /// Decide which lines in a visible block slice need highlighting and apply the
-/// background colour to each.
+/// background colour to each. `lines` is the mutable slice of visible lines
+/// already clipped to the viewport.
 ///
 /// In **visual mode** every absolute logical line that falls inside the
 /// [`VisualRange`] and is also within the visible clip is highlighted. For
 /// line-wise mode (`V`) the full line is patched; for char-wise mode (`v`)
 /// only the selected column range is patched via [`highlight_columns`].
 /// In **normal mode** only the single cursor row is highlighted (full-line).
-///
-/// # Arguments
-///
-/// * `lines`       – mutable slice of visible lines already clipped to the viewport.
-/// * `visual_mode` – current visual selection, or `None` for normal mode.
-/// * `cursor_line` – absolute logical cursor position.
-/// * `block_start` – absolute logical line where this block starts.
-/// * `block_end`   – exclusive end of the block in absolute logical lines.
-/// * `clip_start`  – index within the block of the first visible line (same as
-///   the `start` variable used when slicing `visible_text`).
-/// * `bg`          – background colour to apply.
-pub fn apply_block_highlight(
-    lines: &mut [Line<'static>],
-    visual_mode: Option<VisualRange>,
-    cursor_line: u32,
-    block_start: u32,
-    block_end: u32,
-    clip_start: usize,
-    bg: Color,
-) {
+pub fn apply_block_highlight(lines: &mut [Line<'static>], params: BlockHighlightParams) {
+    let BlockHighlightParams {
+        visual_mode,
+        cursor_line,
+        block_start,
+        block_end,
+        clip_start,
+        bg,
+        width,
+    } = params;
     match visual_mode {
         Some(range) => {
             // Iterate over absolute logical lines that belong to this block
@@ -51,7 +64,7 @@ pub fn apply_block_highlight(
                 if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {
                     if sc == 0 && ec >= line_width {
                         // Full-line highlight — covers line mode and char-mode middle lines.
-                        patch_cursor_highlight(lines, idx, bg);
+                        patch_cursor_highlight(lines, idx, bg, width);
                     } else {
                         // Partial-line highlight — char mode first/last line.
                         if let Some(line) = lines.get(idx) {
@@ -67,7 +80,7 @@ pub fn apply_block_highlight(
                 let cursor_relative = (cursor_line - block_start) as usize;
                 if cursor_relative >= clip_start {
                     let idx = cursor_relative - clip_start;
-                    patch_cursor_highlight(lines, idx, bg);
+                    patch_cursor_highlight(lines, idx, bg, width);
                 }
             }
         }
@@ -224,6 +237,7 @@ pub fn extract_line_text_range(line: &Line<'static>, start_col: u16, end_col: u1
 /// * `block_start` – absolute visual row of the block's first row.
 /// * `block_end`   – absolute visual row exclusive (`block_start + wrapped_height`).
 /// * `bg`          – background colour to apply.
+/// * `width`       – viewport width; full-line highlights are padded to it.
 pub fn apply_visual_or_cursor_highlight(
     lines: &mut [Line<'static>],
     visual_mode: Option<VisualRange>,
@@ -231,6 +245,7 @@ pub fn apply_visual_or_cursor_highlight(
     block_start: u32,
     block_end: u32,
     bg: Color,
+    width: u16,
 ) {
     match visual_mode {
         Some(range) => {
@@ -246,14 +261,14 @@ pub fn apply_visual_or_cursor_highlight(
             let start_idx = (sel_top - block_start) as usize;
             let end_idx = (sel_bot - block_start) as usize;
             for idx in start_idx..=end_idx {
-                patch_cursor_highlight(lines, idx, bg);
+                patch_cursor_highlight(lines, idx, bg, width);
             }
         }
         None => {
             if cursor_line >= block_start && cursor_line < block_end {
                 // Identity mapping: cursor visual row within block = line index.
                 let idx = (cursor_line - block_start) as usize;
-                patch_cursor_highlight(lines, idx, bg);
+                patch_cursor_highlight(lines, idx, bg, width);
             }
         }
     }
@@ -263,27 +278,46 @@ pub fn apply_visual_or_cursor_highlight(
 ///
 /// `lines` is the mutable slice of rendered lines (already clipped to the
 /// viewport). `idx` is the 0-based index within that slice that should be
-/// highlighted. `bg` is the selection background color.
+/// highlighted. `bg` is the selection background color. `width` is the viewport
+/// width the highlighted row is padded to.
 ///
 /// Behaviour:
 /// - If `idx` is out of bounds, the function is a no-op (no panic).
-/// - If the target line has no spans (blank line), a single space span with
-///   the background color is injected so the highlight row is still visible.
-/// - Otherwise every existing span on that line is patched with `.bg(bg)`.
+/// - If the target line has no spans (blank line), it is filled with a
+///   `width`-wide run of spaces carrying the background color.
+/// - Otherwise every existing span on that line is patched with `.bg(bg)` and a
+///   trailing space span pads the row to `width` so the highlight spans the
+///   full viewport (prevents ragged wide-char background remnants on scroll).
 ///
 /// All three block types (Text, Table, Mermaid-source) share this helper so
 /// the highlight logic lives in exactly one place.
-pub fn patch_cursor_highlight(lines: &mut [Line<'static>], idx: usize, bg: Color) {
+pub fn patch_cursor_highlight(lines: &mut [Line<'static>], idx: usize, bg: Color, width: u16) {
     let Some(line) = lines.get_mut(idx) else {
         return;
     };
     if line.spans.is_empty() {
-        // Blank line — inject a space so the colored row is visible.
-        *line = Line::from(Span::styled(" ".to_string(), Style::default().bg(bg)));
-    } else {
-        for span in &mut line.spans {
-            span.style = span.style.patch(Style::default().bg(bg));
-        }
+        // Blank line — fill the whole row with the highlight bg.
+        *line = Line::from(Span::styled(
+            " ".repeat(width as usize),
+            Style::default().bg(bg),
+        ));
+        return;
+    }
+    for span in &mut line.spans {
+        span.style = span.style.patch(Style::default().bg(bg));
+    }
+    // Pad the highlighted row to the full viewport width with the bg colour.
+    // The cursor row is pinned at the viewport top/bottom edge while scrolling
+    // (scrolloff=0), so a ragged (text-width) highlight leaves background
+    // remnants on wide CJK cells that the terminal fails to clear. Filling the
+    // whole row with a uniform bg keeps every cell explicitly painted, so any
+    // stale wide-char half-cell is the same colour and stays invisible.
+    let used = crate::text_layout::measure(&line.spans);
+    if width > used {
+        line.spans.push(Span::styled(
+            " ".repeat((width - used) as usize),
+            Style::default().bg(bg),
+        ));
     }
 }
 

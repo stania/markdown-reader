@@ -1,6 +1,7 @@
 use super::gutter::render_text_with_gutter;
 use super::highlight::{
-    apply_block_highlight, apply_visual_or_cursor_highlight, highlight_matches,
+    BlockHighlightParams, apply_block_highlight, apply_visual_or_cursor_highlight,
+    highlight_matches,
 };
 use super::mermaid_draw::{MermaidDrawParams, draw_mermaid_block};
 use super::state::VisualRange;
@@ -502,6 +503,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                         block_start,
                                         block_end_visual,
                                         app.tokens.state.selection_bg,
+                                        effective_width,
                                     );
 
                                     // Single-cell cursor highlight at the cursor's physical
@@ -591,12 +593,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     if focused {
                                         apply_block_highlight(
                                             &mut visible_text.lines,
-                                            visual_mode,
-                                            cursor_line,
-                                            block_start,
-                                            block_end,
-                                            start,
-                                            app.tokens.state.selection_bg,
+                                            BlockHighlightParams {
+                                                visual_mode,
+                                                cursor_line,
+                                                block_start,
+                                                block_end,
+                                                clip_start: start,
+                                                bg: app.tokens.state.selection_bg,
+                                                width: effective_width,
+                                            },
                                         );
                                     }
                                     text_draws.push(TextDraw {
